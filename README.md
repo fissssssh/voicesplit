@@ -106,6 +106,17 @@ https://hf-mirror.com/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weight
 
 **必须 HTTPS**（WebGPU 要求安全上下文）。
 
+### Cloudflare Pages + R2（推荐配置，模型同源托管）
+
+165MB 模型超静态托管单文件 25 MiB 限制，用 **R2 桶 + Pages Functions** 同源服务（无 CORS 问题）：
+
+1. Cloudflare Dashboard → **R2** → 创建桶（如 `voicesplit-assets`）
+2. 上传 `htdemucs_fp16weights.onnx`（控制台拖拽）
+3. Pages 项目 → **Settings → Bindings** → 添加 **R2 bucket** 绑定，变量名 `VOICESPLIT_ASSETS`（与 `functions/models/[name].js` 一致）
+4. 重新部署：`/models/htdemucs_fp16weights.onnx` 由 Functions 从 R2 流式返回（dev 模式自动回退本地文件）
+
+模型加载源顺序：本地 → 同源 Functions/R2 → hf-mirror → GitHub Release（后两者 CORS 不保证，仅兜底）。
+
 ## 📁 目录结构
 
 ```
