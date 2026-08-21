@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoiceSplit · 浏览器内人声分离</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Righteous&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+  <script>
+    // 主题初始化（同步执行，避免 FOUC）：localStorage 优先，否则跟随系统
+    (function () {
+      try {
+        var saved = localStorage.getItem('voicesplit-theme')
+        var prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches
+        document.documentElement.dataset.theme = saved || (prefersLight ? 'light' : 'dark')
+      } catch (e) {
+        document.documentElement.dataset.theme = 'dark'
+      }
+    })()
+  </script>
+</head>
+<body>
+  <main>
+    <!-- 主题切换 -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="切换浅色 / 深色主题">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+      </svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+      </svg>
+    </button>
+
+    <!-- Hero -->
+    <header class="hero">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 18V5l12-2v13" />
+          <circle cx="6" cy="18" r="3" />
+          <circle cx="18" cy="16" r="3" />
+        </svg>
+        <h1>Voice<span>Split</span></h1>
+      </div>
+      <p class="tagline">htdemucs 人声 / 伴奏分离引擎 &nbsp;·&nbsp; 音频全程在本机处理，<strong>零上传</strong></p>
+      <div class="chips">
+        <div id="env-check" class="chips-row hidden"></div>
+        <div id="ep-badge" class="badge hidden"></div>
+      </div>
+    </header>
+
+    <!-- Step 1 · 上传 -->
+    <section id="step-upload">
+      <div class="stepper" aria-hidden="true">
+        <div class="step-dot done" data-n="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+        <span class="line"></span>
+        <div class="step-dot" data-n="2"><span class="num">2</span></div>
+        <span class="line"></span>
+        <div class="step-dot" data-n="3"><span class="num">3</span></div>
+      </div>
+      <div id="dropzone" tabindex="0" role="button" aria-label="上传音频文件：拖拽到此处或点击选择">
+        <svg class="dz-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 18V5l12-2v13" />
+          <circle cx="6" cy="18" r="3" />
+          <circle cx="18" cy="16" r="3" />
+        </svg>
+        <div class="waveform" aria-hidden="true">
+          <span style="--i:1"></span><span style="--i:2"></span><span style="--i:3"></span>
+          <span style="--i:4"></span><span style="--i:5"></span><span style="--i:6"></span>
+          <span style="--i:7"></span><span style="--i:8"></span><span style="--i:9"></span>
+          <span style="--i:10"></span><span style="--i:11"></span><span style="--i:12"></span>
+          <span style="--i:13"></span><span style="--i:14"></span><span style="--i:15"></span>
+          <span style="--i:16"></span><span style="--i:17"></span><span style="--i:18"></span>
+        </div>
+        <p class="dz-title">拖拽音频到这里，或 <span class="link">选择文件</span></p>
+        <p class="dz-hint">MP3 · WAV · FLAC · OGG · M4A &nbsp;｜&nbsp; 建议单曲 ≤ 10 分钟</p>
+        <input type="file" id="file-input" accept="audio/*" hidden />
+      </div>
+    </section>
+
+    <!-- Step 2 · 处理中 -->
+    <section id="status" class="hidden">
+      <div class="status-line">
+        <span id="status-text">准备中…</span>
+        <span id="status-detail" class="dim"></span>
+      </div>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="bar-fill"></div>
+      </div>
+      <div class="eq" aria-hidden="true">
+        <span style="--i:1"></span><span style="--i:2"></span><span style="--i:3"></span>
+        <span style="--i:4"></span><span style="--i:5"></span>
+      </div>
+    </section>
+
+    <!-- Step 3 · 结果 -->
+    <section id="results" class="hidden">
+      <div class="results-head">
+        <h2>分离完成</h2>
+        <span id="file-name" class="dim"></span>
+      </div>
+      <div id="cards"></div>
+      <p class="hint dim">可以再次拖入新歌曲重新分离 · 所有结果仅存在于本机</p>
+    </section>
+
+    <footer>
+      <span>VoiceSplit — 本地优先的人声分离工具</span>
+      <span class="dim">Chrome/Edge 121+ 启用 GPU（WebGPU）加速 · 全程离线计算</span>
+    </footer>
+  </main>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
