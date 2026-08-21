@@ -14,21 +14,71 @@ const SEGMENT = 343980 // htdemucs 固定输入长度 ≈ 7.8s @ 44.1kHz
 const STEM_KEYS = ['drums', 'bass', 'other', 'vocals']
 
 // jsep.wasm (25.6 MiB) 超静态托管 25 MiB 单文件限制，从部署产物中剔除。
-// CDN 方案：gzip 压缩 (6.0 MiB) 托管在 jsDelivr（有 CORS，且 <20 MiB 限制），
-// 运行时拦截 ORT 对该文件的请求 → 下载 → DecompressionStream 解压 → 返回原始 wasm。
+// 加载链：1) 本地完整文件（dev） 2) 同源分片下载拼接（部署，主路径）
+//        3) jsDelivr gzip CDN 兜底（解压后返回）
+// 拦截所有 jsep.wasm 请求（/ort/ 与 Vite 打包的 /assets/ 路径），返回完整 wasm Response。
 // 拉取失败时 WebGPU 路径自动降级 CPU，不影响功能。
-const JSEP_WASM_CDN = 'https://cdn.jsdelivr.net/gh/fissssssh/voicesplit@main/ort-gz/ort-wasm-simd-threaded.jsep.wasm.gz'
+const JSEP_PARTS_URL = '/ort/ort-wasm-simd-threaded.jsep.wasm.parts.json'
+const JSEP_GZ_CDN = 'https://cdn.jsdelivr.net/gh/fissssssh/voicesplit@main/ort-gz/ort-wasm-simd-threaded.jsep.wasm.gz'
+
+/** 加载 jsep.wasm：同源分片拼接（主）→ gz CDN 解压（兜底），结果缓存 */
+async function loadJsepWasm() {
+  let cache = null
+  try { cache = await caches.open('voicesplit-jsep-v1') } catch { /* 无缓存环境 */ }
+  // 1) 缓存命中
+  if (cache) {
+    const hit = await cache.match(JSEP_PARTS_URL)
+    if (hit) {
+      const raw = await hit.arrayBuffer()
+      if (raw.byteLength > 1e6) {
+        return new Response(raw, { headers: { 'Content-Type': 'application/wasm' } })
+      }
+      await cache.delete(JSEP_PARTS_URL)
+    }
+  }
+  // 2) 同源分片（部署时产物含 part 文件；dev 时 manifest 404）
+  const manResp = await fetch(JSEP_PARTS_URL)
+  if (manResp.ok) {
+    const man = await manResp.json()
+    const full = new Uint8Array(man.size)
+    let received = 0
+    for (let i = 0; i < man.total; i++) {
+      const resp = await fetch(`${JSEP_PARTS_URL.replace('.parts.json', `.part${i}`)}`)
+      if (!resp.ok) throw new Error(`jsep part${i} HTTP ${resp.status}`)
+      const part = new Uint8Array(await resp.arrayBuffer())
+      full.set(part, received)
+      received += part.length
+    }
+    if (full[0] === 0x00 && full[1] === 0x61 && full[2] === 0x73 && full[3] === 0x6d) { // "\0asm"
+      const resp = new Response(full, { headers: { 'Content-Type': 'application/wasm' } })
+      if (cache) cache.put(JSEP_PARTS_URL, resp.clone())
+      return resp
+    }
+    throw new Error('jsep 拼接后 wasm magic 校验失败')
+  }
+  // 3) gz CDN 兜底
+  const gzResp = await fetch(JSEP_GZ_CDN)
+  if (!gzResp.ok) throw new Error(`jsep gz CDN HTTP ${gzResp.status}`)
+  const gz = await gzResp.arrayBuffer()
+  const raw = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
+  return new Response(raw, { headers: { 'Content-Type': 'application/wasm' } })
+}
+
 const origFetch = globalThis.fetch
 globalThis.fetch = async (input, init) => {
   const url = typeof input === 'string' ? input : (input && input.url) || ''
-  // 覆盖所有 jsep.wasm 请求（/ort/ 与 Vite 打包的 /assets/ 路径），重写到 CDN；
-  // CDN URL 自身以 JSEP_WASM_CDN 开头，不会被二次重写（无递归）
-  if (url.endsWith('ort-wasm-simd-threaded.jsep.wasm') && !url.startsWith(JSEP_WASM_CDN)) {
-    const resp = await origFetch(JSEP_WASM_CDN, init)
-    if (!resp.ok) return resp
-    const gz = await resp.arrayBuffer()
-    const raw = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
-    return new Response(raw, { headers: { 'Content-Type': 'application/wasm' } })
+  if (url.endsWith('ort-wasm-simd-threaded.jsep.wasm') && !url.startsWith('http')) {
+    // 1) 本地完整文件（dev 模式存在；部署时被 SPA HTML 顶替则继续）
+    const local = await origFetch(url, init).catch(() => null)
+    if (local && local.ok && !local.headers.get('Content-Type')?.includes('text/html')) {
+      return local
+    }
+    // 2/3) 同源分片 → gz CDN 兜底
+    try {
+      return await loadJsepWasm()
+    } catch (err) {
+      return new Response(`jsep.wasm 加载失败: ${err.message}`, { status: 500 })
+    }
   }
   return origFetch(input, init)
 }
