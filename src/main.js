@@ -11,7 +11,7 @@ const MODEL_SOURCES = [
   'https://hf-mirror.com/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx',
   'https://github.com/fissssssh/voicesplit/releases/download/v0.1.0/htdemucs_fp16weights.onnx',
 ]
-const MODEL_CACHE = 'voicesplit-models-v2'
+const MODEL_CACHE = 'voicesplit-models-v3'
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id)
@@ -72,22 +72,40 @@ let totalSamples = 0
 let songBaseName = 'song'
 let processing = false
 
-/** 加载模型到内存：多源尝试（本地 → Release CDN → 镜像），首次下载缓存到 Cache API */
+/** ONNX ModelProto 校验：protobuf 首字段必为 field 1 varint（0x08 = ir_version），
+ *  且体积远大于错误页——防 SPA fallback 返回的 index.html（HTTP 200）被当模型使用 */
+function looksLikeOnnx(buf) {
+  return buf.length > 1e6 && buf[0] === 0x08
+}
+
+/** 加载模型到内存：多源尝试（本地 → hf-mirror → GitHub Release），
+ *  下载与缓存命中均校验字节有效性；无效数据（如 SPA 回退的 HTML）不缓存并换源 */
 async function loadModel(onProgress) {
   if (modelBuffer) return modelBuffer
   let cache = null
   try { cache = await caches.open(MODEL_CACHE) } catch { /* 非安全上下文时无缓存 */ }
+  const diag = [] // 各源诊断，全部失败时输出
   for (const url of MODEL_SOURCES) {
     try {
       if (cache) {
         const hit = await cache.match(url)
-        if (hit) { // 部署后首次下载过的模型：缓存直读
-          modelBuffer = await hit.arrayBuffer()
-          return modelBuffer
+        if (hit) {
+          const cached = new Uint8Array(await hit.arrayBuffer())
+          if (looksLikeOnnx(cached)) {
+            modelBuffer = cached.buffer
+            return modelBuffer
+          }
+          await cache.delete(url) // 缓存坏数据：清除
+          diag.push(`${url}: 缓存数据无效(${cached.length}B, 首字节 0x${cached[0]?.toString(16)})`)
         }
       }
       const resp = await fetch(url)
-      if (!resp.ok) continue // 本源不可用，试下一个
+      if (!resp.ok) { diag.push(`${url}: HTTP ${resp.status}`); continue }
+      // 快速路径：SPA fallback / 拦截页会返回 HTML，无需下载即可跳过
+      if (resp.headers.get('Content-Type')?.includes('text/html')) {
+        diag.push(`${url}: 返回 HTML（SPA 回退或拦截页）`)
+        continue
+      }
       const total = Number(resp.headers.get('Content-Length') || 0)
       const reader = resp.body.getReader()
       const chunks = []
@@ -105,14 +123,18 @@ async function loadModel(onProgress) {
         buf.set(c, off)
         off += c.length
       }
+      if (!looksLikeOnnx(buf)) { // 拿到非模型字节：不缓存，换源
+        diag.push(`${url}: 数据无效(${buf.length}B, 首字节 0x${buf[0]?.toString(16)})`)
+        continue
+      }
       modelBuffer = buf.buffer
       if (cache) cache.put(url, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } }))
       return modelBuffer
-    } catch {
-      continue // 网络错误等，试下一个源
+    } catch (err) {
+      diag.push(`${url}: ${err.message}`)
     }
   }
-  throw new Error('模型下载失败：本地、GitHub Release、镜像源均不可用')
+  throw new Error(`模型加载失败：所有源均不可用\n${diag.join('\n')}`)
 }
 
 // ---------- 上传 ----------
