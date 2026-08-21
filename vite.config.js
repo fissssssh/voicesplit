@@ -1,5 +1,26 @@
 import { defineConfig } from 'vite'
-import { cpSync, rmSync, readdirSync, existsSync } from 'node:fs'
+import { cpSync, rmSync, readdirSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+
+// 模型分片：165MB 超静态托管 25 MiB 单文件限制，构建时切成 19 MiB/片
+// （留足余量），运行时同源下载拼接（见 src/main.js loadModelParts）
+const MODEL_FILE = 'public/models/htdemucs_fp16weights.onnx'
+const PART_SIZE = 19 * 1024 * 1024
+
+function sliceModel(outDir) {
+  if (!existsSync(MODEL_FILE)) return
+  const data = readFileSync(MODEL_FILE)
+  const n = Math.ceil(data.length / PART_SIZE)
+  const dir = `${outDir}/models`
+  mkdirSync(dir, { recursive: true })
+  for (let i = 0; i < n; i++) {
+    const part = data.subarray(i * PART_SIZE, Math.min((i + 1) * PART_SIZE, data.length))
+    writeFileSync(`${dir}/htdemucs_fp16weights.onnx.part${i}`, part)
+  }
+  writeFileSync(`${dir}/htdemucs_fp16weights.onnx.parts.json`, JSON.stringify({
+    name: 'htdemucs_fp16weights.onnx', total: n, partSize: PART_SIZE, size: data.length,
+  }))
+  rmSync(`${dir}/htdemucs_fp16weights.onnx`, { force: true })
+}
 
 // COOP/COEP 开启 Cross-Origin Isolation：
 // 1) 允许 onnxruntime-web 使用 SharedArrayBuffer 多线程 WASM（兜底加速）
@@ -41,8 +62,9 @@ export default defineConfig({
                 if (f.startsWith('ort-wasm-simd-threaded.jsep')) rmSync(`dist/assets/${f}`, { force: true })
               }
             }
-            // 模型 (165 MB) 同样超限：不随部署产物，运行时按源列表下载（见 src/main.js）
-            rmSync('dist/models', { recursive: true, force: true })
+            // 模型 (165 MB) 超 25 MiB 限制：改为同源分片托管（19 MiB × 9 片 + manifest），
+            // 运行时下载拼接；不再删除 models 目录
+            sliceModel('dist')
           },
         },
       ],

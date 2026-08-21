@@ -16,7 +16,9 @@ const MODEL_SOURCES = [
   'https://hf-mirror.com/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx',
   'https://github.com/fissssssh/voicesplit/releases/download/v0.1.0/htdemucs_fp16weights.onnx',
 ]
-const MODEL_CACHE = 'voicesplit-models-v4'
+const MODEL_CACHE = 'voicesplit-models-v5'
+// 同源分片源（部署时构建产物含 part 文件与 manifest；dev 时 404 自动跳过）
+const MODEL_PARTS_URL = '/models/htdemucs_fp16weights.onnx.parts.json'
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id)
@@ -83,14 +85,45 @@ function looksLikeOnnx(buf) {
   return buf.length > 1e6 && buf[0] === 0x08
 }
 
-/** 加载模型到内存：多源尝试（本地 → hf-mirror → GitHub Release），
+/** 同源分片加载：按 manifest 顺序下载 19 MiB/片并拼接，全程进度可见。
+ *  部署时静态托管模型分片（构建时切片）；dev 时 manifest 404 自动跳过 */
+async function loadModelParts(onProgress, cache) {
+  if (cache) {
+    const hit = await cache.match(MODEL_PARTS_URL)
+    if (hit) {
+      const cached = new Uint8Array(await hit.arrayBuffer())
+      if (looksLikeOnnx(cached)) return cached.buffer
+      await cache.delete(MODEL_PARTS_URL)
+    }
+  }
+  const manResp = await fetch(MODEL_PARTS_URL)
+  if (!manResp.ok) throw new Error(`分片清单 HTTP ${manResp.status}`)
+  const man = await manResp.json()
+  const full = new Uint8Array(man.size)
+  let received = 0
+  for (let i = 0; i < man.total; i++) {
+    const resp = await fetch(`${MODEL_PARTS_URL.replace('.parts.json', `.part${i}`)}`)
+    if (!resp.ok) throw new Error(`分片 part${i} HTTP ${resp.status}`)
+    const part = new Uint8Array(await resp.arrayBuffer())
+    full.set(part, received)
+    received += part.length
+    if (man.size) onProgress?.(Math.min(received, man.size), man.size)
+  }
+  if (!looksLikeOnnx(full)) throw new Error(`分片拼接数据无效(${full.length}B, 首字节 0x${full[0]?.toString(16)})`)
+  if (cache) cache.put(MODEL_PARTS_URL, new Response(full, { headers: { 'Content-Type': 'application/octet-stream' } }))
+  return full.buffer
+}
+
+/** 加载模型到内存：本地完整 → 同源分片 → LFS CDN → hf-mirror → GitHub Release，
  *  下载与缓存命中均校验字节有效性；无效数据（如 SPA 回退的 HTML）不缓存并换源 */
 async function loadModel(onProgress) {
   if (modelBuffer) return modelBuffer
   let cache = null
   try { cache = await caches.open(MODEL_CACHE) } catch { /* 非安全上下文时无缓存 */ }
   const diag = [] // 各源诊断，全部失败时输出
+  let sourceIdx = 0
   for (const url of MODEL_SOURCES) {
+    sourceIdx++
     try {
       if (cache) {
         const hit = await cache.match(url)
@@ -137,6 +170,15 @@ async function loadModel(onProgress) {
       return modelBuffer
     } catch (err) {
       diag.push(`${url}: ${err.message}`)
+    }
+    // 本地完整源失败后：尝试同源分片（部署时静态托管切片，dev 时 404 跳过）
+    if (sourceIdx === 1) {
+      try {
+        const parts = await loadModelParts(onProgress, cache)
+        if (parts) { modelBuffer = parts; return modelBuffer }
+      } catch (err) {
+        diag.push(`同源分片: ${err.message}`)
+      }
     }
   }
   throw new Error(`模型加载失败：所有源均不可用\n${diag.join('\n')}`)
