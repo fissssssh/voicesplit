@@ -4,7 +4,14 @@ import {
   decodeFile, resampleTo44100, segmentBuffer, createOverlapAdder, mixBacking, encodeWav,
 } from './audio.js'
 
-const MODEL_URL = '/models/htdemucs_fp16weights.onnx'
+// 模型源（按优先级）：本地（dev/自托管）→ GitHub Release CDN → hf-mirror 镜像兜底
+// 165MB 模型不随部署产物（超静态托管 25 MiB 单文件限制），运行时下载并缓存
+const MODEL_SOURCES = [
+  '/models/htdemucs_fp16weights.onnx',
+  'https://github.com/fissssssh/voicesplit/releases/download/v0.1.0/htdemucs_fp16weights.onnx',
+  'https://hf-mirror.com/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx',
+]
+const MODEL_CACHE = 'voicesplit-models-v1'
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id)
@@ -65,30 +72,47 @@ let totalSamples = 0
 let songBaseName = 'song'
 let processing = false
 
-/** 加载模型到内存（仅首次真正读取，进度回调；之后直接返回缓存） */
+/** 加载模型到内存：多源尝试（本地 → Release CDN → 镜像），首次下载缓存到 Cache API */
 async function loadModel(onProgress) {
   if (modelBuffer) return modelBuffer
-  const resp = await fetch(MODEL_URL)
-  if (!resp.ok) throw new Error(`模型下载失败 HTTP ${resp.status}`)
-  const total = Number(resp.headers.get('Content-Length') || 0)
-  const reader = resp.body.getReader()
-  const chunks = []
-  let received = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-    received += value.length
-    if (total) onProgress?.(received, total)
+  let cache = null
+  try { cache = await caches.open(MODEL_CACHE) } catch { /* 非安全上下文时无缓存 */ }
+  for (const url of MODEL_SOURCES) {
+    try {
+      if (cache) {
+        const hit = await cache.match(url)
+        if (hit) { // 部署后首次下载过的模型：缓存直读
+          modelBuffer = await hit.arrayBuffer()
+          return modelBuffer
+        }
+      }
+      const resp = await fetch(url)
+      if (!resp.ok) continue // 本源不可用，试下一个
+      const total = Number(resp.headers.get('Content-Length') || 0)
+      const reader = resp.body.getReader()
+      const chunks = []
+      let received = 0
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        chunks.push(value)
+        received += value.length
+        if (total) onProgress?.(received, total)
+      }
+      const buf = new Uint8Array(received)
+      let off = 0
+      for (const c of chunks) {
+        buf.set(c, off)
+        off += c.length
+      }
+      modelBuffer = buf.buffer
+      if (cache) cache.put(url, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } }))
+      return modelBuffer
+    } catch {
+      continue // 网络错误等，试下一个源
+    }
   }
-  const buf = new Uint8Array(received)
-  let off = 0
-  for (const c of chunks) {
-    buf.set(c, off)
-    off += c.length
-  }
-  modelBuffer = buf.buffer
-  return modelBuffer
+  throw new Error('模型下载失败：本地、GitHub Release、镜像源均不可用')
 }
 
 // ---------- 上传 ----------
