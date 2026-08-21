@@ -5,12 +5,14 @@ import {
 } from './audio.js'
 
 // 模型源（按优先级）：
-// 1. /models/<file> —— dev 模式走本地静态文件；部署后由 Pages Functions
-//    接管并从 R2 桶流式返回（同源，无 CORS 问题，见 functions/models/[name].js）
-// 2. hf-mirror（有 CORS 的兜底，实测浏览器 GET 被 308 拦截，仅作最后尝试）
-// 3. GitHub Release 兜底（同样无 CORS，最后尝试）
+// 1. /models/<file> —— dev 模式走本地静态文件；部署后若配置了 Pages Functions+R2
+//    则同源返回（无 CORS），未配置时被 SPA fallback 的 HTML 拦截并跳过
+// 2. GitHub LFS 媒体服务（media.githubusercontent.com）——免费公用 CDN，
+//    CORS 已实测 ✓，模型本就通过 Git LFS 托管，零额外操作
+// 3. hf-mirror / GitHub Release 兜底（CORS 不保证，能通则用）
 const MODEL_SOURCES = [
   '/models/htdemucs_fp16weights.onnx',
+  'https://media.githubusercontent.com/media/fissssssh/voicesplit/main/public/models/htdemucs_fp16weights.onnx',
   'https://hf-mirror.com/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx',
   'https://github.com/fissssssh/voicesplit/releases/download/v0.1.0/htdemucs_fp16weights.onnx',
 ]

@@ -106,16 +106,18 @@ https://hf-mirror.com/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weight
 
 **必须 HTTPS**（WebGPU 要求安全上下文）。
 
-### Cloudflare Pages + R2（推荐配置，模型同源托管）
+### 模型 CDN（免费，零配置）
 
-165MB 模型超静态托管单文件 25 MiB 限制，用 **R2 桶 + Pages Functions** 同源服务（无 CORS 问题）：
+165MB 模型超静态托管单文件 25 MiB 限制，默认经 **GitHub LFS 媒体服务** 分发
+（`media.githubusercontent.com`，免费、CORS 已实测开放，模型本就随仓库 LFS 托管）：
+- 运行时模型源顺序：本地 `/models/` → LFS 媒体 CDN → hf-mirror → GitHub Release（兜底）
+- 首次访问从 CDN 下载 165MB（有进度条），之后浏览器 Cache API 缓存，无需重复下载
+- LFS 免费额度 1GB 存储 + 1GB/月带宽，个人/小规模使用足够
 
-1. Cloudflare Dashboard → **R2** → 创建桶（如 `voicesplit-assets`）
-2. 上传 `htdemucs_fp16weights.onnx`（控制台拖拽）
-3. Pages 项目 → **Settings → Bindings** → 添加 **R2 bucket** 绑定，变量名 `VOICESPLIT_ASSETS`（与 `functions/models/[name].js` 一致）
-4. 重新部署：`/models/htdemucs_fp16weights.onnx` 由 Functions 从 R2 流式返回（dev 模式自动回退本地文件）
-
-模型加载源顺序：本地 → 同源 Functions/R2 → hf-mirror → GitHub Release（后两者 CORS 不保证，仅兜底）。
+可选：如需完全同源分发（更好速度与稳定性），可用 **Cloudflare R2 桶 + Pages Functions**（免费额度 10GB 存储）：
+1. Cloudflare Dashboard → **R2** → 创建桶 → 上传 `htdemucs_fp16weights.onnx`
+2. Pages 项目 → **Settings → Bindings** → R2 bucket 绑定，变量名 `VOICESPLIT_ASSETS`
+3. 重新部署后 `/models/...` 由 `functions/models/[name].js` 同源返回（dev 模式自动回退本地文件）
 
 ## 📁 目录结构
 
