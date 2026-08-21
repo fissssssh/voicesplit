@@ -417,7 +417,7 @@ function renderResults() {
     card.className = 'card'
     card.dataset.key = t.key
     const secs = totalSamples / SAMPLE_RATE
-    const sizeMB = secs * 176.4 // 16-bit 双声道 WAV ≈ 176.4 KB/s
+    const sizeMB = secs * 0.1764 // 16-bit 双声道 WAV ≈ 176.4 KB/s = 0.1764 MB/s
     card.innerHTML = `
       <div class="track-head">
         <span class="track-icon">${SVG_WRAP(t.icon)}</span>
