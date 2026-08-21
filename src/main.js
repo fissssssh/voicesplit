@@ -124,6 +124,7 @@ async function loadModel(onProgress) {
   let sourceIdx = 0
   for (const url of MODEL_SOURCES) {
     sourceIdx++
+    let failed = false // 本源失败：统一标记，让分片源有机会被尝试
     try {
       if (cache) {
         const hit = await cache.match(url)
@@ -138,41 +139,44 @@ async function loadModel(onProgress) {
         }
       }
       const resp = await fetch(url)
-      if (!resp.ok) { diag.push(`${url}: HTTP ${resp.status}`); continue }
-      // 快速路径：SPA fallback / 拦截页会返回 HTML，无需下载即可跳过
-      if (resp.headers.get('Content-Type')?.includes('text/html')) {
+      if (!resp.ok) { diag.push(`${url}: HTTP ${resp.status}`); failed = true }
+      else if (resp.headers.get('Content-Type')?.includes('text/html')) {
+        // 快速路径：SPA fallback / 拦截页会返回 HTML，无需下载
         diag.push(`${url}: 返回 HTML（SPA 回退或拦截页）`)
-        continue
+        failed = true
+      } else {
+        const total = Number(resp.headers.get('Content-Length') || 0)
+        const reader = resp.body.getReader()
+        const chunks = []
+        let received = 0
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          chunks.push(value)
+          received += value.length
+          if (total) onProgress?.(received, total)
+        }
+        const buf = new Uint8Array(received)
+        let off = 0
+        for (const c of chunks) {
+          buf.set(c, off)
+          off += c.length
+        }
+        if (!looksLikeOnnx(buf)) { // 拿到非模型字节：不缓存，换源
+          diag.push(`${url}: 数据无效(${buf.length}B, 首字节 0x${buf[0]?.toString(16)})`)
+          failed = true
+        } else {
+          modelBuffer = buf.buffer
+          if (cache) cache.put(url, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } }))
+          return modelBuffer
+        }
       }
-      const total = Number(resp.headers.get('Content-Length') || 0)
-      const reader = resp.body.getReader()
-      const chunks = []
-      let received = 0
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        chunks.push(value)
-        received += value.length
-        if (total) onProgress?.(received, total)
-      }
-      const buf = new Uint8Array(received)
-      let off = 0
-      for (const c of chunks) {
-        buf.set(c, off)
-        off += c.length
-      }
-      if (!looksLikeOnnx(buf)) { // 拿到非模型字节：不缓存，换源
-        diag.push(`${url}: 数据无效(${buf.length}B, 首字节 0x${buf[0]?.toString(16)})`)
-        continue
-      }
-      modelBuffer = buf.buffer
-      if (cache) cache.put(url, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } }))
-      return modelBuffer
     } catch (err) {
       diag.push(`${url}: ${err.message}`)
+      failed = true
     }
-    // 本地完整源失败后：尝试同源分片（部署时静态托管切片，dev 时 404 跳过）
-    if (sourceIdx === 1) {
+    // 本地完整源失败（404/HTML/数据无效/网络错误）后：优先尝试同源分片
+    if (sourceIdx === 1 && failed) {
       try {
         const parts = await loadModelParts(onProgress, cache)
         if (parts) { modelBuffer = parts; return modelBuffer }
