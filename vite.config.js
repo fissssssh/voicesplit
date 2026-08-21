@@ -5,6 +5,9 @@ import { cpSync } from 'node:fs'
 // 1) 允许 onnxruntime-web 使用 SharedArrayBuffer 多线程 WASM（兜底加速）
 // 2) WebGPU 本身不需要，但需要安全上下文（localhost/HTTPS 天然满足）
 export default defineConfig({
+  // 顶层 plugins 数组：wrangler（Cloudflare）检测到 Vite 项目时会注入其插件，
+  // 必须存在该数组否则报 "Cannot modify Vite config"；无副作用，不注入时为空
+  plugins: [],
   server: {
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
