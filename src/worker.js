@@ -13,17 +13,22 @@ if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) {
 const SEGMENT = 343980 // htdemucs 固定输入长度 ≈ 7.8s @ 44.1kHz
 const STEM_KEYS = ['drums', 'bass', 'other', 'vocals']
 
-// jsep.wasm (25.6 MiB) 超静态托管 25 MiB 单文件限制，从部署产物中剔除，
-// 运行时把 ORT 对该文件的请求重写到 CDN（GitHub Release，CORS 开放）。
-// 仅重写本地路径请求，避免递归；拉取失败时 WebGPU 路径自动降级 CPU。
-const JSEP_WASM_CDN = 'https://github.com/fissssssh/voicesplit/releases/download/v0.1.0/ort-wasm-simd-threaded.jsep.wasm'
+// jsep.wasm (25.6 MiB) 超静态托管 25 MiB 单文件限制，从部署产物中剔除。
+// CDN 方案：gzip 压缩 (6.0 MiB) 托管在 jsDelivr（有 CORS，且 <20 MiB 限制），
+// 运行时拦截 ORT 对该文件的请求 → 下载 → DecompressionStream 解压 → 返回原始 wasm。
+// 拉取失败时 WebGPU 路径自动降级 CPU，不影响功能。
+const JSEP_WASM_CDN = 'https://cdn.jsdelivr.net/gh/fissssssh/voicesplit@main/ort-gz/ort-wasm-simd-threaded.jsep.wasm.gz'
 const origFetch = globalThis.fetch
-globalThis.fetch = (input, init) => {
+globalThis.fetch = async (input, init) => {
   const url = typeof input === 'string' ? input : (input && input.url) || ''
   // 覆盖所有 jsep.wasm 请求（/ort/ 与 Vite 打包的 /assets/ 路径），重写到 CDN；
   // CDN URL 自身以 JSEP_WASM_CDN 开头，不会被二次重写（无递归）
   if (url.endsWith('ort-wasm-simd-threaded.jsep.wasm') && !url.startsWith(JSEP_WASM_CDN)) {
-    return origFetch(JSEP_WASM_CDN, init)
+    const resp = await origFetch(JSEP_WASM_CDN, init)
+    if (!resp.ok) return resp
+    const gz = await resp.arrayBuffer()
+    const raw = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
+    return new Response(raw, { headers: { 'Content-Type': 'application/wasm' } })
   }
   return origFetch(input, init)
 }

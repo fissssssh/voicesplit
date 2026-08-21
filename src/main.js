@@ -4,14 +4,14 @@ import {
   decodeFile, resampleTo44100, segmentBuffer, createOverlapAdder, mixBacking, encodeWav,
 } from './audio.js'
 
-// 模型源（按优先级）：本地（dev/自托管）→ GitHub Release CDN → hf-mirror 镜像兜底
+// 模型源（按优先级）：本地（dev/自托管）→ hf-mirror（有 CORS，实测可用）→ GitHub Release 兜底
 // 165MB 模型不随部署产物（超静态托管 25 MiB 单文件限制），运行时下载并缓存
 const MODEL_SOURCES = [
   '/models/htdemucs_fp16weights.onnx',
-  'https://github.com/fissssssh/voicesplit/releases/download/v0.1.0/htdemucs_fp16weights.onnx',
   'https://hf-mirror.com/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx',
+  'https://github.com/fissssssh/voicesplit/releases/download/v0.1.0/htdemucs_fp16weights.onnx',
 ]
-const MODEL_CACHE = 'voicesplit-models-v1'
+const MODEL_CACHE = 'voicesplit-models-v2'
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id)
